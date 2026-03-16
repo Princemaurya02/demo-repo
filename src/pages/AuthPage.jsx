@@ -1,30 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import {
-    Eye, EyeOff, Mail, Lock, User, ArrowRight,
-    BookOpen, Zap, Target, Brain, TrendingUp, Code2
-} from 'lucide-react';
+import { Mail, ArrowRight, RefreshCw, CheckCircle, Zap, BookOpen, Brain, Target, TrendingUp, Code2 } from 'lucide-react';
 import './AuthPage.css';
 
-
-
-// ─── Password strength ────────────────────────────────────────────────────────
-function passwordStrength(pw) {
-    if (!pw) return { score: 0, label: '', color: '' };
-    let score = 0;
-    if (pw.length >= 8)  score++;
-    if (pw.length >= 12) score++;
-    if (/[A-Z]/.test(pw)) score++;
-    if (/[0-9]/.test(pw)) score++;
-    if (/[^A-Za-z0-9]/.test(pw)) score++;
-    if (score <= 1) return { score, label: 'Weak',    color: '#ff4757' };
-    if (score <= 2) return { score, label: 'Fair',    color: '#ffb347' };
-    if (score <= 3) return { score, label: 'Good',    color: '#00d4ff' };
-    return              { score, label: 'Strong',  color: '#00ff88' };
-}
-
-// ─── Floating background elements ─────────────────────────────────────────────
+// ─── Floating background icons ────────────────────────────────────────────────
 const FLOATS = [
     { icon: '📚', x: 8,  y: 15, size: 28, dur: 7  },
     { icon: '⚡', x: 18, y: 55, size: 22, dur: 9  },
@@ -32,258 +12,230 @@ const FLOATS = [
     { icon: '🧠', x: 82, y: 20, size: 24, dur: 8  },
     { icon: '📈', x: 75, y: 62, size: 20, dur: 11 },
     { icon: '💡', x: 88, y: 85, size: 22, dur: 7  },
-    { icon: '</>',x: 12, y: 40, size: 16, dur: 10 },
+    { icon: '</>', x: 12, y: 40, size: 16, dur: 10 },
     { icon: '🚀', x: 90, y: 42, size: 20, dur: 9  },
 ];
 
-// ─── Input field ──────────────────────────────────────────────────────────────
-function Field({ icon: Icon, type, placeholder, value, onChange, error, rightEl }) {
+// ─── OTP digit input ──────────────────────────────────────────────────────────
+function OtpInput({ value, onChange, disabled }) {
+    const refs  = Array.from({ length: 6 }, () => useRef(null));
+    const digits = value.split('').concat(Array(6).fill('')).slice(0, 6);
+
+    const handleKey = (i, e) => {
+        if (e.key === 'Backspace') {
+            const next = digits.slice(); next[i] = '';
+            onChange(next.join(''));
+            if (i > 0) refs[i - 1].current?.focus();
+            return;
+        }
+        if (!/^\d$/.test(e.key)) return;
+        const next = digits.slice(); next[i] = e.key;
+        onChange(next.join(''));
+        if (i < 5) refs[i + 1].current?.focus();
+    };
+
+    const handlePaste = e => {
+        const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+        onChange(pasted.padEnd(6, '').slice(0, 6));
+        refs[Math.min(pasted.length, 5)].current?.focus();
+        e.preventDefault();
+    };
+
     return (
-        <div className="auth-field-wrap">
-            <div className={`auth-input-row ${error ? 'has-error' : ''}`}>
-                <Icon size={16} className="auth-input-icon" />
+        <div className="otp-digit-row">
+            {digits.map((d, i) => (
                 <input
-                    type={type}
-                    placeholder={placeholder}
-                    value={value}
-                    onChange={onChange}
-                    autoComplete="off"
-                    className="auth-input"
+                    key={i}
+                    ref={refs[i]}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={d}
+                    onChange={() => {}}
+                    onKeyDown={e => handleKey(i, e)}
+                    onPaste={handlePaste}
+                    disabled={disabled}
+                    className={`otp-digit-box ${d ? 'filled' : ''}`}
+                    autoFocus={i === 0}
                 />
-                {rightEl}
-            </div>
-            {error && <p className="auth-field-error">{error}</p>}
+            ))}
         </div>
     );
 }
 
-// ─── Sign In Form ─────────────────────────────────────────────────────────────
-function SignInForm({ onSwitch }) {
-    const { signIn } = useAuth();
-    const navigate = useNavigate();
-
-    const [email,    setEmail]    = useState('');
-    const [password, setPassword] = useState('');
-    const [showPw,   setShowPw]   = useState(false);
-    const [remember, setRemember] = useState(false);
-    const [errors,   setErrors]   = useState({});
-    const [loading,  setLoading]  = useState(false);
-    const [apiErr,   setApiErr]   = useState('');
-
-    const validate = () => {
-        const e = {};
-        if (!email) e.email = 'Email is required.';
-        else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.email = 'Invalid email format.';
-        if (!password) e.password = 'Password is required.';
-        return e;
-    };
+// ─── Step 1 — Email Screen ────────────────────────────────────────────────────
+function EmailStep({ onNext }) {
+    const { sendOtp } = useAuth();
+    const [email,   setEmail]   = useState('');
+    const [error,   setError]   = useState('');
+    const [loading, setLoading] = useState(false);
 
     const handleSubmit = async e => {
         e.preventDefault();
-        setApiErr('');
-        const errs = validate();
-        if (Object.keys(errs).length) { setErrors(errs); return; }
-        setErrors({});
+        setError('');
+        if (!email) return setError('Email is required.');
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setError('Invalid email format.');
         setLoading(true);
         try {
-            await signIn({ email, password });
-            navigate('/', { replace: true });
+            await sendOtp(email);
+            onNext(email);
         } catch (err) {
-            setApiErr(err.message);
-        } finally { setLoading(false); }
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
     };
 
-
-
     return (
-        <form className="auth-form" onSubmit={handleSubmit} noValidate>
-            <div className="auth-form-header">
-                <h2 className="auth-form-title">Welcome Back</h2>
-                <p className="auth-form-sub">Sign in to continue your learning journey.</p>
+        <div className="auth-otp-step">
+            <div className="auth-otp-icon-wrap">
+                <Mail size={28} className="auth-otp-icon" />
             </div>
+            <h2 className="auth-form-title">Login to YTLearn</h2>
+            <p className="auth-form-sub">Enter your email to continue learning.</p>
 
-            {apiErr && <div className="auth-api-error">{apiErr}</div>}
-
-            <Field
-                icon={Mail} type="email" placeholder="Email address"
-                value={email} onChange={e => setEmail(e.target.value)}
-                error={errors.email}
-            />
-            <Field
-                icon={Lock} type={showPw ? 'text' : 'password'} placeholder="Password"
-                value={password} onChange={e => setPassword(e.target.value)}
-                error={errors.password}
-                rightEl={
-                    <button type="button" className="auth-pw-toggle" onClick={() => setShowPw(v => !v)} tabIndex={-1}>
-                        {showPw ? <EyeOff size={15}/> : <Eye size={15}/>}
-                    </button>
-                }
-            />
-
-            <div className="auth-row-opts">
-                <label className="auth-remember">
-                    <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
-                    <span>Remember me</span>
-                </label>
-                <button type="button" className="auth-link">Forgot password?</button>
-            </div>
-
-            <button type="submit" className="auth-btn-primary" disabled={loading}>
-                {loading
-                    ? <><span className="auth-spinner"/><span style={{fontSize:13,opacity:0.85}}>Connecting…</span></>
-                    : <><span>Sign In</span><ArrowRight size={16}/></>}
-            </button>
-
+            {error && <div className="auth-api-error">{error}</div>}
             {loading && (
-                <p style={{textAlign:'center',fontSize:12,color:'rgba(255,255,255,0.45)',marginTop:0}}>
+                <p className="auth-wakeup-hint">
                     ⏳ Server may be waking up — please wait up to 30 seconds.
                 </p>
             )}
 
-            <p className="auth-switch-text">
-                Don't have an account?{' '}
-                <button type="button" className="auth-link" onClick={onSwitch}>Sign Up</button>
-            </p>
-        </form>
+            <form onSubmit={handleSubmit} className="auth-otp-form" noValidate>
+                <div className={`auth-input-row ${error && !email ? 'has-error' : ''}`}>
+                    <Mail size={16} className="auth-input-icon" />
+                    <input
+                        type="email"
+                        placeholder="your@email.com"
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        className="auth-input"
+                        autoComplete="email"
+                        autoFocus
+                    />
+                </div>
+
+                <button type="submit" className="auth-btn-primary" disabled={loading}>
+                    {loading
+                        ? <><span className="auth-spinner"/><span>Sending OTP…</span></>
+                        : <><span>Send OTP</span><ArrowRight size={16}/></>}
+                </button>
+            </form>
+        </div>
     );
 }
 
-// ─── Sign Up Form ─────────────────────────────────────────────────────────────
-function SignUpForm({ onSwitch }) {
-    const { signUp } = useAuth();
+// ─── Step 2 — OTP Screen ──────────────────────────────────────────────────────
+function OtpStep({ email, onBack }) {
+    const { sendOtp, verifyOtp } = useAuth();
     const navigate = useNavigate();
-
-    const [username, setUsername] = useState('');
-    const [email,    setEmail]    = useState('');
-    const [password, setPassword] = useState('');
-    const [confirm,  setConfirm]  = useState('');
-    const [showPw,   setShowPw]   = useState(false);
-    const [showCf,   setShowCf]   = useState(false);
-    const [agreed,   setAgreed]   = useState(false);
-    const [errors,   setErrors]   = useState({});
+    const [otp,      setOtp]      = useState('');
+    const [error,    setError]    = useState('');
     const [loading,  setLoading]  = useState(false);
-    const [apiErr,   setApiErr]   = useState('');
+    const [success,  setSuccess]  = useState(false);
+    const [resendSec, setResendSec] = useState(30);
 
-    const pwStrength = passwordStrength(password);
+    // Countdown for resend button
+    useEffect(() => {
+        if (resendSec <= 0) return;
+        const t = setInterval(() => setResendSec(s => s - 1), 1000);
+        return () => clearInterval(t);
+    }, [resendSec]);
 
-    const validate = () => {
-        const e = {};
-        if (!username.trim()) e.username = 'Username is required.';
-        if (!email) e.email = 'Email is required.';
-        else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.email = 'Invalid email format.';
-        if (!password) e.password = 'Password is required.';
-        else if (password.length < 8) e.password = 'Minimum 8 characters.';
-        else if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) e.password = 'Must include letters and numbers.';
-        if (password !== confirm) e.confirm = 'Passwords do not match.';
-        if (!agreed) e.agreed = 'You must accept the terms.';
-        return e;
-    };
-
-    const handleSubmit = async e => {
-        e.preventDefault();
-        setApiErr('');
-        const errs = validate();
-        if (Object.keys(errs).length) { setErrors(errs); return; }
-        setErrors({});
+    const handleVerify = async e => {
+        e?.preventDefault();
+        setError('');
+        if (otp.replace(/\D/g, '').length < 6) return setError('Enter the full 6-digit code.');
         setLoading(true);
         try {
-            await signUp({ username: username.trim(), email, password });
-            navigate('/', { replace: true });
+            await verifyOtp(email, otp);
+            setSuccess(true);
+            setTimeout(() => navigate('/', { replace: true }), 1800);
         } catch (err) {
-            setApiErr(err.message);
-        } finally { setLoading(false); }
+            setError(err.message);
+            setOtp('');
+        } finally {
+            setLoading(false);
+        }
     };
 
+    const handleResend = async () => {
+        setError(''); setOtp(''); setResendSec(30);
+        try { await sendOtp(email); }
+        catch (err) { setError(err.message); }
+    };
 
+    // Auto-verify when all 6 digits entered
+    useEffect(() => {
+        if (otp.replace(/\D/g, '').length === 6 && !loading && !success) {
+            handleVerify();
+        }
+    }, [otp]);
+
+    if (success) {
+        return (
+            <div className="auth-otp-step auth-success-step">
+                <div className="auth-success-icon"><CheckCircle size={52} strokeWidth={1.5}/></div>
+                <h2 className="auth-form-title" style={{color:'#00ff88'}}>Login Successful!</h2>
+                <p className="auth-form-sub">Welcome back — redirecting to your dashboard…</p>
+            </div>
+        );
+    }
 
     return (
-        <form className="auth-form" onSubmit={handleSubmit} noValidate>
-            <div className="auth-form-header">
-                <h2 className="auth-form-title">Create Account</h2>
-                <p className="auth-form-sub">Start your learning journey today.</p>
+        <div className="auth-otp-step">
+            <div className="auth-otp-icon-wrap verify">
+                <Zap size={28} className="auth-otp-icon" />
             </div>
+            <h2 className="auth-form-title">Check your email</h2>
+            <p className="auth-form-sub">
+                Enter the 6-digit code sent to <strong style={{color:'#a78bfa'}}>{email}</strong>
+            </p>
 
-            {apiErr && <div className="auth-api-error">{apiErr}</div>}
-
-            <Field
-                icon={User} type="text" placeholder="Username"
-                value={username} onChange={e => setUsername(e.target.value)}
-                error={errors.username}
-            />
-            <Field
-                icon={Mail} type="email" placeholder="Email address"
-                value={email} onChange={e => setEmail(e.target.value)}
-                error={errors.email}
-            />
-            <Field
-                icon={Lock} type={showPw ? 'text' : 'password'} placeholder="Password"
-                value={password} onChange={e => setPassword(e.target.value)}
-                error={errors.password}
-                rightEl={
-                    <button type="button" className="auth-pw-toggle" onClick={() => setShowPw(v => !v)} tabIndex={-1}>
-                        {showPw ? <EyeOff size={15}/> : <Eye size={15}/>}
-                    </button>
-                }
-            />
-
-            {/* Password strength */}
-            {password && (
-                <div className="auth-strength">
-                    <div className="auth-strength-bars">
-                        {[1,2,3,4,5].map(n => (
-                            <div
-                                key={n}
-                                className="auth-strength-bar"
-                                style={{ background: n <= pwStrength.score ? pwStrength.color : 'rgba(255,255,255,0.08)' }}
-                            />
-                        ))}
-                    </div>
-                    <span style={{ color: pwStrength.color }}>{pwStrength.label}</span>
-                </div>
+            {error && <div className="auth-api-error">{error}</div>}
+            {loading && (
+                <p className="auth-wakeup-hint">
+                    ⏳ Verifying — please wait…
+                </p>
             )}
 
-            <Field
-                icon={Lock} type={showCf ? 'text' : 'password'} placeholder="Confirm password"
-                value={confirm} onChange={e => setConfirm(e.target.value)}
-                error={errors.confirm}
-                rightEl={
-                    <button type="button" className="auth-pw-toggle" onClick={() => setShowCf(v => !v)} tabIndex={-1}>
-                        {showCf ? <EyeOff size={15}/> : <Eye size={15}/>}
-                    </button>
-                }
-            />
+            <form onSubmit={handleVerify} className="auth-otp-form" noValidate>
+                <OtpInput value={otp} onChange={setOtp} disabled={loading || success} />
 
-            <label className="auth-terms-check">
-                <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />
-                <span>I agree to the <button type="button" className="auth-link">Terms of Service</button></span>
-            </label>
-            {errors.agreed && <p className="auth-field-error" style={{marginTop:-6}}>{errors.agreed}</p>}
+                <button type="submit" className="auth-btn-primary" disabled={loading || otp.length < 6}>
+                    {loading
+                        ? <><span className="auth-spinner"/><span>Verifying…</span></>
+                        : <><span>Verify OTP</span><ArrowRight size={16}/></>}
+                </button>
+            </form>
 
-            <button type="submit" className="auth-btn-primary" disabled={loading}>
-                {loading
-                    ? <span className="auth-spinner"/>
-                    : <><span>Create Account</span><ArrowRight size={16}/></>}
-            </button>
-
-            <p className="auth-switch-text">
-                Already have an account?{' '}
-                <button type="button" className="auth-link" onClick={onSwitch}>Sign In</button>
-            </p>
-        </form>
+            <div className="auth-otp-footer">
+                <button className="auth-link" onClick={onBack} disabled={loading}>
+                    ← Change email
+                </button>
+                <button
+                    className="auth-link"
+                    onClick={handleResend}
+                    disabled={resendSec > 0 || loading}
+                >
+                    <RefreshCw size={12}/>{' '}
+                    {resendSec > 0 ? `Resend in ${resendSec}s` : 'Resend OTP'}
+                </button>
+            </div>
+        </div>
     );
 }
 
 // ─── Main Auth Page ───────────────────────────────────────────────────────────
 export default function AuthPage() {
-    const [mode, setMode] = useState('signin');   // 'signin' | 'signup'
+    const [step,  setStep]  = useState('email');   // 'email' | 'otp'
+    const [email, setEmail] = useState('');
 
-    const switchToSignUp = useCallback(() => setMode('signup'), []);
-    const switchToSignIn = useCallback(() => setMode('signin'), []);
+    const goToOtp  = useCallback(e => { setEmail(e); setStep('otp'); }, []);
+    const goBack   = useCallback(()  => setStep('email'), []);
 
     return (
         <div className="auth-page">
-
-            {/* Floating background icons */}
             {FLOATS.map((f, i) => (
                 <div
                     key={i}
@@ -294,10 +246,9 @@ export default function AuthPage() {
                 </div>
             ))}
 
-            {/* Left — Branding panel */}
+            {/* Left branding panel */}
             <div className="auth-left">
                 <div className="auth-left-inner">
-                    {/* Logo */}
                     <div className="auth-logo">
                         <div className="auth-logo-icon">
                             <svg width="36" height="36" viewBox="0 0 52 52" fill="none">
@@ -323,15 +274,14 @@ export default function AuthPage() {
                             Your AI-powered study cockpit designed for focus, discipline, and measurable learning progress.
                         </p>
 
-                        {/* Feature pills */}
                         <div className="auth-features">
                             {[
-                                { icon: BookOpen,   label: 'Smart Notes'     },
-                                { icon: Brain,      label: 'AI Tutor'        },
-                                { icon: Target,     label: 'Roadmaps'        },
-                                { icon: TrendingUp, label: 'Analytics'       },
-                                { icon: Zap,        label: 'Focus Engine'    },
-                                { icon: Code2,      label: 'Study Rooms'     },
+                                { icon: BookOpen,   label: 'Smart Notes'   },
+                                { icon: Brain,      label: 'AI Tutor'      },
+                                { icon: Target,     label: 'Roadmaps'      },
+                                { icon: TrendingUp, label: 'Analytics'     },
+                                { icon: Zap,        label: 'Focus Engine'  },
+                                { icon: Code2,      label: 'Study Rooms'   },
                             ].map((f, i) => (
                                 <div key={i} className="auth-feature-pill" style={{ animationDelay:`${i*0.1}s` }}>
                                     <f.icon size={14}/>
@@ -340,7 +290,6 @@ export default function AuthPage() {
                             ))}
                         </div>
 
-                        {/* Stats */}
                         <div className="auth-stats">
                             {[
                                 { val: '10K+', label: 'Learners'   },
@@ -360,13 +309,10 @@ export default function AuthPage() {
             {/* Right — Auth card */}
             <div className="auth-right">
                 <div className="auth-card">
-                    <div className={`auth-forms-slider ${mode === 'signup' ? 'show-signup' : ''}`}>
-                        <div className="auth-form-pane auth-form-pane-signin">
-                            <SignInForm onSwitch={switchToSignUp} />
-                        </div>
-                        <div className="auth-form-pane auth-form-pane-signup">
-                            <SignUpForm onSwitch={switchToSignIn} />
-                        </div>
+                    <div className="auth-otp-container">
+                        {step === 'email'
+                            ? <EmailStep onNext={goToOtp} />
+                            : <OtpStep   email={email} onBack={goBack} />}
                     </div>
                 </div>
             </div>

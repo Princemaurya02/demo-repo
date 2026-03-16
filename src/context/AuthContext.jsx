@@ -1,108 +1,75 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 
-// ─── Storage key ──────────────────────────────────────────────────────────────
 const USER_KEY = 'ytlearn_user';
+const BASE_URL  = import.meta.env.VITE_API_URL || '';
+const API       = `${BASE_URL}/api/auth`;
 
-// ─── API base (set VITE_API_URL in production, leave empty for dev proxy) ─────
-const BASE_URL = import.meta.env.VITE_API_URL || '';
-const API      = `${BASE_URL}/api/auth`;
-
-// ─── Fetch with timeout ───────────────────────────────────────────────────────
-// Render free tier cold-starts in ~30s. Give it 60s before failing clearly.
-async function fetchWithTimeout(url, options, timeoutMs = 60_000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+// ─── Fetch with 60s timeout (handles Render cold starts) ─────────────────────
+async function fetchWithTimeout(url, options, ms = 60_000) {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
     try {
-        const res = await fetch(url, { ...options, signal: controller.signal });
+        const res = await fetch(url, { ...options, signal: ctrl.signal });
         clearTimeout(timer);
         return res;
     } catch (err) {
         clearTimeout(timer);
-        if (err.name === 'AbortError') {
-            throw new Error('Server is taking too long to respond. It may be waking up — please wait 30 seconds and try again.');
-        }
-        throw new Error('Cannot reach the server. Please check your internet connection.');
+        if (err.name === 'AbortError') throw new Error('Server is waking up — please wait 30 seconds and try again.');
+        throw new Error('Cannot reach the server. Check your internet connection.');
     }
 }
 
-// ─── Safe JSON parser — never throws "Unexpected end of JSON" ─────────────────
+// ─── Safe JSON parser ─────────────────────────────────────────────────────────
 async function safeJson(res) {
     const text = await res.text();
-    if (!text || !text.trim()) {
-        throw new Error('Server returned an empty response. It may still be starting up — please try again in 30 seconds.');
-    }
-    try {
-        return JSON.parse(text);
-    } catch {
-        console.error('[YTLearn] Non-JSON response body:', text.slice(0, 300));
-        throw new Error('Server returned an invalid response. Please try again.');
-    }
+    if (!text?.trim()) throw new Error('Server returned an empty response. It may still be starting up — try again in 30 seconds.');
+    try { return JSON.parse(text); }
+    catch { throw new Error('Server returned an invalid response. Please try again.'); }
 }
 
 // ─── localStorage helpers ─────────────────────────────────────────────────────
-function saveUser(user) {
-    try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
-}
-
-function loadUser() {
-    try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; }
-}
-
-function removeUser() {
-    try { localStorage.removeItem(USER_KEY); } catch {}
-}
+const saveUser   = u  => { try { localStorage.setItem(USER_KEY, JSON.stringify(u)); } catch {} };
+const loadUser   = () => { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; } };
+const removeUser = () => { try { localStorage.removeItem(USER_KEY); } catch {} };
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-    const [user,      setUser]      = useState(loadUser);
-    const [loading]                 = useState(false);
-    const [authError, setAuthError] = useState('');
+    const [user,    setUser]    = useState(loadUser);
+    const [loading]             = useState(false);
 
-    // ── Sign Up ───────────────────────────────────────────────────────────────
-    const signUp = useCallback(async ({ username, email, password }) => {
-        setAuthError('');
-        const res  = await fetchWithTimeout(`${API}/signup`, {
+    // ── Send OTP ──────────────────────────────────────────────────────────────
+    const sendOtp = useCallback(async (email) => {
+        const res  = await fetchWithTimeout(`${API}/send-otp`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ username, email, password }),
+            body:    JSON.stringify({ email }),
         });
         const data = await safeJson(res);
-        if (!res.ok) throw new Error(data.message || 'Sign up failed.');
-        saveUser(data.user);
-        setUser(data.user);
-        return data.user;
+        if (!res.ok) throw new Error(data.message || 'Failed to send OTP.');
+        return data;
     }, []);
 
-    // ── Sign In ───────────────────────────────────────────────────────────────
-    const signIn = useCallback(async ({ email, password }) => {
-        setAuthError('');
-        const res  = await fetchWithTimeout(`${API}/signin`, {
+    // ── Verify OTP ────────────────────────────────────────────────────────────
+    const verifyOtp = useCallback(async (email, otp) => {
+        const res  = await fetchWithTimeout(`${API}/verify-otp`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ email, password }),
+            body:    JSON.stringify({ email, otp }),
         });
         const data = await safeJson(res);
-        if (!res.ok) throw new Error(data.message || 'Sign in failed.');
+        if (!res.ok) throw new Error(data.message || 'OTP verification failed.');
         saveUser(data.user);
         setUser(data.user);
-        return data.user;
+        return data;
     }, []);
 
     // ── Sign Out ──────────────────────────────────────────────────────────────
-    const signOut = useCallback(() => {
-        removeUser();
-        setUser(null);
-    }, []);
-
-    const isAuthenticated = !!user;
+    const signOut = useCallback(() => { removeUser(); setUser(null); }, []);
 
     return (
-        <AuthContext.Provider value={{
-            user, loading, authError, isAuthenticated,
-            signUp, signIn, signOut, setAuthError,
-        }}>
+        <AuthContext.Provider value={{ user, loading, isAuthenticated: !!user, sendOtp, verifyOtp, signOut }}>
             {children}
         </AuthContext.Provider>
     );

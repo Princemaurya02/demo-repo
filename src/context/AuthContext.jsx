@@ -7,11 +7,29 @@ const USER_KEY = 'ytlearn_user';
 const BASE_URL = import.meta.env.VITE_API_URL || '';
 const API      = `${BASE_URL}/api/auth`;
 
+// ─── Fetch with timeout ───────────────────────────────────────────────────────
+// Render free tier cold-starts in ~30s. Give it 60s before failing clearly.
+async function fetchWithTimeout(url, options, timeoutMs = 60_000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timer);
+        return res;
+    } catch (err) {
+        clearTimeout(timer);
+        if (err.name === 'AbortError') {
+            throw new Error('Server is taking too long to respond. It may be waking up — please wait 30 seconds and try again.');
+        }
+        throw new Error('Cannot reach the server. Please check your internet connection.');
+    }
+}
+
 // ─── Safe JSON parser — never throws "Unexpected end of JSON" ─────────────────
 async function safeJson(res) {
     const text = await res.text();
     if (!text || !text.trim()) {
-        throw new Error('Server returned an empty response. Is the backend running?');
+        throw new Error('Server returned an empty response. It may still be starting up — please try again in 30 seconds.');
     }
     try {
         return JSON.parse(text);
@@ -38,14 +56,14 @@ function removeUser() {
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-    const [user,    setUser]    = useState(loadUser);   // load from localStorage on first render
-    const [loading]             = useState(false);       // no async token validation needed
+    const [user,      setUser]      = useState(loadUser);
+    const [loading]                 = useState(false);
     const [authError, setAuthError] = useState('');
 
     // ── Sign Up ───────────────────────────────────────────────────────────────
     const signUp = useCallback(async ({ username, email, password }) => {
         setAuthError('');
-        const res  = await fetch(`${API}/signup`, {
+        const res  = await fetchWithTimeout(`${API}/signup`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ username, email, password }),
@@ -60,7 +78,7 @@ export function AuthProvider({ children }) {
     // ── Sign In ───────────────────────────────────────────────────────────────
     const signIn = useCallback(async ({ email, password }) => {
         setAuthError('');
-        const res  = await fetch(`${API}/signin`, {
+        const res  = await fetchWithTimeout(`${API}/signin`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ email, password }),

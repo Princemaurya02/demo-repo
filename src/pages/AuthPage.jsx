@@ -130,9 +130,15 @@ function SignInForm({ onSwitch }) {
 
             <button type="submit" className="auth-btn-primary" disabled={loading}>
                 {loading
-                    ? <span className="auth-spinner"/>
+                    ? <><span className="auth-spinner"/><span style={{fontSize:13,opacity:0.85}}>Connecting…</span></>
                     : <><span>Sign In</span><ArrowRight size={16}/></>}
             </button>
+
+            {loading && (
+                <p style={{textAlign:'center',fontSize:12,color:'rgba(255,255,255,0.45)',marginTop:0}}>
+                    ⏳ Server may be waking up — please wait up to 30 seconds.
+                </p>
+            )}
 
             <p className="auth-switch-text">
                 Don't have an account?{' '}
